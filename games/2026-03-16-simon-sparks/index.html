@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Simon Sparks (2026-03-16)</title>
+  <style>
+    :root{color-scheme:dark;--bg:#070a14;--fg:#eaf0ff;--muted:#a7b2e6;--card:rgba(255,255,255,.06);--b:rgba(255,255,255,.12)}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(900px 600px at 50% 35%, #131e46 0%, var(--bg) 60%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .wrap{width:min(980px,94vw)}
+    .top{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;margin-bottom:10px;}
+    .panel{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:12px 14px;backdrop-filter:blur(6px)}
+    h1{margin:0 0 6px;font-size:18px}
+    .muted{color:var(--muted);font-size:13px;line-height:1.35}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+    .stats b{color:var(--fg)}
+    .grid{display:grid;grid-template-columns:repeat(2, 1fr);gap:14px;margin-top:8px}
+    .pad{aspect-ratio:1/1;border-radius:18px;border:1px solid rgba(255,255,255,.14);cursor:pointer;transition:transform .06s ease, filter .06s ease;filter:saturate(.95) brightness(.85)}
+    .pad:active{transform:scale(.99)}
+    .pad.on{filter:saturate(1.2) brightness(1.18); box-shadow:0 0 0 2px rgba(255,255,255,.08), 0 0 28px rgba(255,255,255,.18)}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    button{cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--fg);padding:8px 10px;border-radius:12px;font-weight:600}
+    button:hover{background:rgba(255,255,255,.12)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="panel" style="flex:1;min-width:260px">
+        <h1>Simon Sparks</h1>
+        <div class="muted">Watch the pattern, repeat it. Each round adds one step.<br/>Controls: click pads or press <b>1</b><b>2</b><b>3</b><b>4</b> • <b>R</b> restart</div>
+      </div>
+      <div class="panel" style="min-width:260px">
+        <div class="stats">
+          <div>Round: <b id="round">0</b></div>
+          <div>Best: <b id="best">0</b></div>
+          <div>Status: <b id="status">ready</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="grid" id="grid">
+        <div class="pad" data-i="0" style="background:linear-gradient(180deg, rgba(80,255,140,.9), rgba(30,120,70,.7))"></div>
+        <div class="pad" data-i="1" style="background:linear-gradient(180deg, rgba(120,190,255,.9), rgba(40,80,150,.7))"></div>
+        <div class="pad" data-i="2" style="background:linear-gradient(180deg, rgba(255,220,120,.9), rgba(160,120,40,.7))"></div>
+        <div class="pad" data-i="3" style="background:linear-gradient(180deg, rgba(255,110,150,.9), rgba(150,40,80,.7))"></div>
+      </div>
+      <div class="btns">
+        <button id="start">Start / Next Round</button>
+        <button id="restart">Restart (R)</button>
+      </div>
+      <div class="muted" style="margin-top:10px">Tip: say the colors in your head. Speed increases slightly over time.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const pads = [...document.querySelectorAll('.pad')];
+  const roundEl = document.getElementById('round');
+  const bestEl = document.getElementById('best');
+  const statusEl = document.getElementById('status');
+  const startBtn = document.getElementById('start');
+  const restartBtn = document.getElementById('restart');
+
+  const LS='simonSparksBest';
+  let best=+localStorage.getItem(LS)||0;
+  bestEl.textContent=best;
+
+  let seq=[];
+  let idx=0;
+  let accepting=false;
+  let round=0;
+
+  // beep
+  let ac=null;
+  function beep(i, dur=0.11){
+    try{
+      ac = ac || new (window.AudioContext||window.webkitAudioContext)();
+      const t0 = ac.currentTime;
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      const freqs=[392, 523.25, 659.25, 784];
+      o.type='triangle';
+      o.frequency.value=freqs[i%freqs.length];
+      g.gain.setValueAtTime(0.0001,t0);
+      g.gain.exponentialRampToValueAtTime(0.05,t0+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t0); o.stop(t0+dur);
+    } catch(_) {}
+  }
+
+  function setStatus(s){ statusEl.textContent=s; }
+  function sync(){ roundEl.textContent=round; bestEl.textContent=best; }
+
+  function reset(){
+    seq=[]; idx=0; accepting=false; round=0;
+    setStatus('ready');
+    sync();
+  }
+
+  function flash(i, ms=220){
+    pads[i].classList.add('on');
+    beep(i, Math.max(0.06, ms/1000*0.7));
+    setTimeout(()=>pads[i].classList.remove('on'), ms);
+  }
+
+  async function playSeq(){
+    accepting=false;
+    setStatus('watch');
+    const base = Math.max(140, 260 - round*10);
+    for(const i of seq){
+      flash(i, base);
+      await new Promise(r=>setTimeout(r, base+120));
+    }
+    idx=0;
+    accepting=true;
+    setStatus('your turn');
+  }
+
+  async function nextRound(){
+    if(accepting) return;
+    round += 1;
+    seq.push(Math.floor(Math.random()*4));
+    sync();
+    await new Promise(r=>setTimeout(r, 250));
+    playSeq();
+  }
+
+  function press(i){
+    if(!accepting) return;
+    flash(i, 160);
+    if(i !== seq[idx]){
+      accepting=false;
+      setStatus('wrong');
+      if(round-1 > best){ best = round-1; localStorage.setItem(LS,String(best)); }
+      sync();
+      setTimeout(()=>setStatus('ready'), 900);
+      return;
+    }
+    idx += 1;
+    if(idx === seq.length){
+      accepting=false;
+      setStatus('nice');
+      setTimeout(()=>setStatus('ready'), 500);
+    }
+  }
+
+  pads.forEach(p => p.addEventListener('click', () => press(+p.dataset.i)));
+
+  addEventListener('keydown', (e) => {
+    const k=e.key.toLowerCase();
+    if(k==='r') reset();
+    if(['1','2','3','4'].includes(k)) press(+k-1);
+    if(k==='enter') nextRound();
+  });
+
+  startBtn.onclick = () => nextRound();
+  restartBtn.onclick = () => reset();
+
+  reset();
+})();
+</script>
+</body>
+</html>

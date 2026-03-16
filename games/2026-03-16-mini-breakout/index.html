@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Mini Breakout (2026-03-16)</title>
+  <style>
+    :root{color-scheme:dark;--bg:#070a14;--fg:#eaf0ff;--muted:#a7b2e6;--card:rgba(255,255,255,.06);--b:rgba(255,255,255,.12);--accent:#7cf6ff;--danger:#ff4d6d;}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(900px 600px at 50% 35%, #131e46 0%, var(--bg) 60%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .wrap{width:min(980px,94vw)}
+    .top{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;margin-bottom:10px;}
+    .panel{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:12px 14px;backdrop-filter:blur(6px)}
+    h1{margin:0 0 6px;font-size:18px}
+    .muted{color:var(--muted);font-size:13px;line-height:1.35}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+    .stats b{color:var(--fg)}
+    canvas{width:100%;aspect-ratio:16/9;background:linear-gradient(180deg, rgba(0,0,0,.20), rgba(0,0,0,.65));border:1px solid rgba(255,255,255,.14);border-radius:16px;display:block}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    button{cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--fg);padding:8px 10px;border-radius:12px;font-weight:600}
+    button:hover{background:rgba(255,255,255,.12)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="panel" style="flex:1;min-width:260px">
+        <h1>Mini Breakout</h1>
+        <div class="muted">Bounce the ball, clear the bricks. Lose a life if it falls.<br/>Controls: <b>Mouse</b> or <b>←/→</b> • <b>R</b> restart • <b>P</b> pause</div>
+      </div>
+      <div class="panel" style="min-width:260px">
+        <div class="stats">
+          <div>Score: <b id="score">0</b></div>
+          <div>Lives: <b id="lives">3</b></div>
+          <div>Level: <b id="lvl">1</b></div>
+        </div>
+      </div>
+    </div>
+    <canvas id="c" width="1280" height="720"></canvas>
+    <div class="btns">
+      <button id="restart">Restart (R)</button>
+      <button id="pause">Pause/Resume (P)</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const lvlEl = document.getElementById('lvl');
+
+  const W=()=>canvas.width, H=()=>canvas.height;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+  let paused=false;
+  let score=0, lives=3, lvl=1;
+
+  const paddle={w:170,h:18,x:0,y:0,v:0};
+  const ball={x:0,y:0,r:10,vx:420,vy:-520};
+  let bricks=[];
+
+  function makeBricks(){
+    bricks=[];
+    const cols=12, rows=5;
+    const pad=10;
+    const bw=(W()-2*60-(cols-1)*pad)/cols;
+    const bh=32;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        bricks.push({
+          x:60+c*(bw+pad),
+          y:70+r*(bh+pad),
+          w:bw,
+          h:bh,
+          hp: 1 + (r>=2?1:0) + (lvl>=3?1:0)
+        });
+      }
+    }
+  }
+
+  function resetBall(){
+    ball.x=W()/2; ball.y=H()*0.70;
+    const s = 520 + (lvl-1)*40;
+    const ang = (-Math.PI/3) + Math.random()*(Math.PI/3);
+    ball.vx = Math.cos(ang)*s;
+    ball.vy = Math.sin(ang)*s;
+    if(ball.vy>0) ball.vy *= -1;
+  }
+
+  function reset(all=true){
+    paused=false;
+    if(all){ score=0; lives=3; lvl=1; }
+    paddle.x=W()/2; paddle.y=H()*0.86;
+    paddle.v=0;
+    makeBricks();
+    resetBall();
+    sync();
+  }
+
+  function sync(){
+    scoreEl.textContent=score;
+    livesEl.textContent=lives;
+    lvlEl.textContent=lvl;
+  }
+
+  // input
+  const keys=new Set();
+  addEventListener('keydown',(e)=>{
+    const k=e.key.toLowerCase();
+    if(['arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+    keys.add(k);
+    if(k==='p') paused=!paused;
+    if(k==='r') reset(true);
+  },{passive:false});
+  addEventListener('keyup',(e)=>keys.delete(e.key.toLowerCase()));
+
+  canvas.addEventListener('mousemove',(e)=>{
+    const rect=canvas.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)/rect.width*W();
+    paddle.x = clamp(mx, paddle.w/2, W()-paddle.w/2);
+  });
+
+  document.getElementById('restart').onclick=()=>reset(true);
+  document.getElementById('pause').onclick=()=>paused=!paused;
+
+  function circleRectCollide(cx,cy,cr, rx,ry,rw,rh){
+    const x = clamp(cx, rx, rx+rw);
+    const y = clamp(cy, ry, ry+rh);
+    const dx = cx-x, dy=cy-y;
+    return dx*dx+dy*dy <= cr*cr;
+  }
+
+  function update(dt){
+    if(paused) return;
+
+    // keyboard paddle
+    let ax=0;
+    if(keys.has('arrowleft')||keys.has('a')) ax-=1;
+    if(keys.has('arrowright')||keys.has('d')) ax+=1;
+    paddle.x = clamp(paddle.x + ax*720*dt, paddle.w/2, W()-paddle.w/2);
+
+    // ball
+    ball.x += ball.vx*dt;
+    ball.y += ball.vy*dt;
+
+    // walls
+    if(ball.x-ball.r<0){ ball.x=ball.r; ball.vx*=-1; }
+    if(ball.x+ball.r>W()){ ball.x=W()-ball.r; ball.vx*=-1; }
+    if(ball.y-ball.r<0){ ball.y=ball.r; ball.vy*=-1; }
+
+    // paddle
+    const px=paddle.x-paddle.w/2, py=paddle.y-paddle.h/2;
+    if(circleRectCollide(ball.x,ball.y,ball.r, px,py,paddle.w,paddle.h) && ball.vy>0){
+      // reflect with angle based on hit position
+      const t = (ball.x - paddle.x)/(paddle.w/2);
+      const speed = Math.hypot(ball.vx,ball.vy);
+      const ang = (-Math.PI/2) + t*(Math.PI/3);
+      ball.vx = Math.cos(ang)*speed;
+      ball.vy = Math.sin(ang)*speed;
+      ball.y = py - ball.r - 0.5;
+    }
+
+    // bricks
+    for(let i=bricks.length-1;i>=0;i--){
+      const b=bricks[i];
+      if(circleRectCollide(ball.x,ball.y,ball.r, b.x,b.y,b.w,b.h)){
+        // simple bounce: decide axis by penetration
+        const cx = clamp(ball.x, b.x, b.x+b.w);
+        const cy = clamp(ball.y, b.y, b.y+b.h);
+        const dx = ball.x - cx;
+        const dy = ball.y - cy;
+        if(Math.abs(dx) > Math.abs(dy)) ball.vx*=-1; else ball.vy*=-1;
+
+        b.hp -= 1;
+        score += 10;
+        if(b.hp<=0) bricks.splice(i,1);
+        break;
+      }
+    }
+
+    // lose
+    if(ball.y - ball.r > H()){
+      lives -= 1;
+      if(lives<=0){
+        reset(true);
+        return;
+      }
+      resetBall();
+    }
+
+    // win level
+    if(bricks.length===0){
+      lvl += 1;
+      makeBricks();
+      resetBall();
+    }
+
+    sync();
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W(),H());
+
+    // bricks
+    for(const b of bricks){
+      const hue = 190 + (b.hp-1)*40;
+      ctx.fillStyle = `hsla(${hue}, 90%, 65%, 0.92)`;
+      ctx.fillRect(b.x,b.y,b.w,b.h);
+      ctx.strokeStyle='rgba(0,0,0,0.35)';
+      ctx.strokeRect(b.x+0.5,b.y+0.5,b.w-1,b.h-1);
+    }
+
+    // paddle
+    ctx.fillStyle='rgba(231,245,255,0.85)';
+    ctx.fillRect(paddle.x-paddle.w/2, paddle.y-paddle.h/2, paddle.w, paddle.h);
+
+    // ball
+    ctx.fillStyle='rgba(124,246,255,0.95)';
+    ctx.shadowColor='rgba(124,246,255,0.75)';
+    ctx.shadowBlur=18;
+    ctx.beginPath(); ctx.arc(ball.x,ball.y,ball.r,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur=0;
+
+    if(paused) overlay('Paused', 'Press P to resume');
+  }
+
+  function overlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,W(),H());
+    ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,0.92)';
+    ctx.font='700 56px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(title, W()/2, H()/2 - 10);
+    ctx.fillStyle='rgba(255,255,255,0.78)';
+    ctx.font='500 18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(subtitle, W()/2, H()/2 + 34);
+    ctx.restore();
+  }
+
+  function loop(ts){
+    const dt = Math.min(0.04, (ts-(loop.last||ts))/1000);
+    loop.last=ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  reset(true);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Pixel Snake (2026-03-16)</title>
+  <style>
+    :root{color-scheme:dark;--bg:#070a14;--fg:#eaf0ff;--muted:#a7b2e6;--card:rgba(255,255,255,.06);--b:rgba(255,255,255,.12);--accent:#7cf6ff;}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(900px 600px at 50% 35%, #131e46 0%, var(--bg) 60%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .wrap{width:min(980px,94vw)}
+    .top{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;margin-bottom:10px;}
+    .panel{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:12px 14px;backdrop-filter:blur(6px)}
+    h1{margin:0 0 6px;font-size:18px}
+    .muted{color:var(--muted);font-size:13px;line-height:1.35}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+    .stats b{color:var(--fg)}
+    canvas{width:100%;aspect-ratio:16/9;background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.65));border:1px solid rgba(255,255,255,.14);border-radius:16px;display:block}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    button{cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--fg);padding:8px 10px;border-radius:12px;font-weight:600}
+    button:hover{background:rgba(255,255,255,.12)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="panel" style="flex:1;min-width:260px">
+        <h1>Pixel Snake</h1>
+        <div class="muted">Classic snake on a grid. Eat food, don’t hit walls or yourself.<br/>Controls: <b>Arrow keys</b>/<b>WASD</b> • <b>R</b> restart • <b>P</b> pause</div>
+      </div>
+      <div class="panel" style="min-width:260px">
+        <div class="stats">
+          <div>Score: <b id="score">0</b></div>
+          <div>Best: <b id="best">0</b></div>
+          <div>Speed: <b id="spd">1.0x</b></div>
+        </div>
+      </div>
+    </div>
+    <canvas id="c" width="1280" height="720"></canvas>
+    <div class="btns">
+      <button id="restart">Restart (R)</button>
+      <button id="pause">Pause/Resume (P)</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const spdEl = document.getElementById('spd');
+
+  const GRID_W = 40;
+  const GRID_H = 22;
+  const cell = () => Math.floor(Math.min(canvas.width/GRID_W, canvas.height/GRID_H));
+  const ox = () => Math.floor((canvas.width - GRID_W*cell())/2);
+  const oy = () => Math.floor((canvas.height - GRID_H*cell())/2);
+
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const key = (e)=>e.key.toLowerCase();
+
+  const LS = 'pixelSnakeBest';
+  let best = +localStorage.getItem(LS) || 0;
+  bestEl.textContent = best;
+
+  let paused = false;
+  let dir = {x:1,y:0};
+  let nextDir = {x:1,y:0};
+  let snake = [];
+  let food = {x:10,y:10};
+  let score = 0;
+  let tickMs = 140;
+  let acc = 0;
+  let gameOver = false;
+
+  function rnd(n){ return Math.floor(Math.random()*n); }
+
+  function placeFood(){
+    while(true){
+      const f = {x:rnd(GRID_W), y:rnd(GRID_H)};
+      if(!snake.some(s=>s.x===f.x && s.y===f.y)) { food=f; return; }
+    }
+  }
+
+  function reset(){
+    paused=false; gameOver=false;
+    dir={x:1,y:0}; nextDir={x:1,y:0};
+    snake=[{x:6,y:11},{x:5,y:11},{x:4,y:11}];
+    score=0;
+    tickMs=140;
+    acc=0;
+    placeFood();
+    sync();
+  }
+
+  function sync(){
+    scoreEl.textContent = score;
+    bestEl.textContent = best;
+    spdEl.textContent = (140/tickMs).toFixed(1)+'x';
+  }
+
+  function setDir(dx,dy){
+    // prevent 180° turns
+    if(dx === -dir.x && dy === -dir.y) return;
+    nextDir = {x:dx,y:dy};
+  }
+
+  addEventListener('keydown', (e) => {
+    const k = key(e);
+    if(['arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault();
+    if(k==='w'||k==='arrowup') setDir(0,-1);
+    if(k==='s'||k==='arrowdown') setDir(0,1);
+    if(k==='a'||k==='arrowleft') setDir(-1,0);
+    if(k==='d'||k==='arrowright') setDir(1,0);
+    if(k==='p') paused = !paused;
+    if(k==='r') reset();
+  }, {passive:false});
+
+  document.getElementById('restart').onclick = reset;
+  document.getElementById('pause').onclick = () => paused = !paused;
+
+  function step(){
+    dir = nextDir;
+    const head = snake[0];
+    const nx = head.x + dir.x;
+    const ny = head.y + dir.y;
+
+    // walls
+    if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H){ return die(); }
+
+    // self
+    if(snake.some((s,i)=>i!==snake.length-1 && s.x===nx && s.y===ny)) return die();
+
+    snake.unshift({x:nx,y:ny});
+
+    if(nx===food.x && ny===food.y){
+      score += 1;
+      tickMs = clamp(tickMs*0.965, 70, 140);
+      placeFood();
+    } else {
+      snake.pop();
+    }
+
+    if(score>best){ best=score; localStorage.setItem(LS,String(best)); }
+    sync();
+  }
+
+  function die(){
+    gameOver = true;
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // board
+    const s = cell();
+    const x0 = ox();
+    const y0 = oy();
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(x0,y0,GRID_W*s,GRID_H*s);
+
+    // grid lines
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = 'rgba(124,246,255,0.18)';
+    for(let x=0;x<=GRID_W;x++){
+      ctx.beginPath(); ctx.moveTo(x0+x*s, y0); ctx.lineTo(x0+x*s, y0+GRID_H*s); ctx.stroke();
+    }
+    for(let y=0;y<=GRID_H;y++){
+      ctx.beginPath(); ctx.moveTo(x0, y0+y*s); ctx.lineTo(x0+GRID_W*s, y0+y*s); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // food
+    ctx.fillStyle = 'rgba(255,230,120,0.95)';
+    ctx.shadowColor = 'rgba(255,230,120,0.7)';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(x0+(food.x+0.5)*s, y0+(food.y+0.5)*s, s*0.35, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // snake
+    for(let i=snake.length-1;i>=0;i--){
+      const seg = snake[i];
+      const t = i===0;
+      ctx.fillStyle = t ? 'rgba(124,246,255,0.92)' : 'rgba(231,245,255,0.75)';
+      ctx.fillRect(x0+seg.x*s+1, y0+seg.y*s+1, s-2, s-2);
+    }
+
+    ctx.restore();
+
+    if(paused && !gameOver) overlay('Paused', 'Press P to resume');
+    if(gameOver) overlay('Game Over', `Score: ${score}  •  Press R to restart`);
+  }
+
+  function overlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,0.92)';
+    ctx.font='700 56px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(title, canvas.width/2, canvas.height/2 - 10);
+    ctx.fillStyle='rgba(255,255,255,0.78)';
+    ctx.font='500 18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(subtitle, canvas.width/2, canvas.height/2 + 34);
+    ctx.restore();
+  }
+
+  function loop(ts){
+    const dt = Math.min(0.05, (ts - (loop.last||ts))/1000);
+    loop.last = ts;
+
+    if(!paused && !gameOver){
+      acc += dt*1000;
+      while(acc >= tickMs){
+        acc -= tickMs;
+        step();
+      }
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
