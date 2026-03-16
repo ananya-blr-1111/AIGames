@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Laser Dodge (2026-03-16)</title>
+  <style>
+    :root{color-scheme:dark; --bg:#070a14; --fg:#e9edff; --muted:#a6b0df; --accent:#7cf6ff; --danger:#ff4d6d;}
+    html,body{height:100%;}
+    body{margin:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(900px 600px at 50% 35%, #101a3a 0%, var(--bg) 60%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .wrap{width:min(980px, 94vw);}
+    .top{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;}
+    .panel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:12px 14px;backdrop-filter: blur(6px);}
+    h1{font-size:18px;margin:0 0 6px;letter-spacing:.2px;}
+    .muted{color:var(--muted);font-size:13px;line-height:1.35;}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+    .stats b{color:var(--fg);font-weight:650}
+    canvas{width:100%;aspect-ratio:16/9;background:linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.65));border:1px solid rgba(255,255,255,.14);border-radius:16px;display:block;}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+    button{cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--fg);padding:8px 10px;border-radius:12px;font-weight:600}
+    button:hover{background:rgba(255,255,255,.12)}
+    .hint{font-size:12px;color:var(--muted);margin-top:8px}
+    a{color:var(--accent);text-decoration:none}
+    a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="panel" style="flex:1;min-width:260px">
+        <h1>Laser Dodge</h1>
+        <div class="muted">
+          Survive the sweeping lasers as long as you can. Lasers speed up over time.
+          <br/>Controls: <b>WASD</b>/<b>Arrow keys</b> to move • <b>Space</b> to dash (cooldown) • <b>R</b> restart • <b>P</b> pause
+        </div>
+      </div>
+      <div class="panel" style="min-width:260px">
+        <div class="stats">
+          <div>Time: <b id="time">0.0</b>s</div>
+          <div>Best: <b id="best">0.0</b>s</div>
+          <div>Hits: <b id="hits">0</b></div>
+          <div>Dash: <b id="dash">ready</b></div>
+        </div>
+        <div class="hint">Tip: tiny movements beat panic. Dash lets you cross a laser if timed.</div>
+      </div>
+    </div>
+
+    <canvas id="c" width="1280" height="720" aria-label="Game canvas"></canvas>
+
+    <div class="btns">
+      <button id="restart">Restart (R)</button>
+      <button id="pause">Pause/Resume (P)</button>
+      <button id="mute">Sound: On</button>
+    </div>
+
+    <div class="hint">Made for the “one simple HTML game every day” streak. Folder date: 2026-03-16.</div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const elTime = document.getElementById('time');
+  const elBest = document.getElementById('best');
+  const elHits = document.getElementById('hits');
+  const elDash = document.getElementById('dash');
+  const btnRestart = document.getElementById('restart');
+  const btnPause = document.getElementById('pause');
+  const btnMute = document.getElementById('mute');
+
+  const W = () => canvas.width;
+  const H = () => canvas.height;
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const len = (x,y) => Math.hypot(x,y);
+  const now = () => performance.now();
+
+  // Simple beep SFX
+  let audioOn = true;
+  let ac = null;
+  function beep(freq=440, dur=0.06, type='sine', gain=0.04){
+    if(!audioOn) return;
+    try{
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const t0 = ac.currentTime;
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain, t0+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t0); o.stop(t0+dur);
+    } catch(_) {}
+  }
+
+  // Input
+  const keys = new Set();
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase()) || ['w','a','s','d','p','r',' '].includes(k)) e.preventDefault();
+    keys.add(k);
+    if(k === 'r') reset();
+    if(k === 'p') togglePause();
+    if(k === ' ') tryDash();
+  }, {passive:false});
+  window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+  btnRestart.onclick = () => reset();
+  btnPause.onclick = () => togglePause();
+  btnMute.onclick = () => { audioOn = !audioOn; btnMute.textContent = `Sound: ${audioOn?'On':'Off'}`; if(audioOn) beep(660,0.05,'triangle',0.03); };
+
+  // Game state
+  const LS_KEY = 'laserDodgeBest';
+  let best = +localStorage.getItem(LS_KEY) || 0;
+  elBest.textContent = best.toFixed(1);
+
+  const player = {
+    x: 0, y: 0,
+    r: 16,
+    vx: 0, vy: 0,
+    speed: 520,
+    dashSpeed: 1200,
+    dashCd: 1.2,
+    dashReadyAt: 0,
+    dashInvulnMs: 160,
+    invulnUntil: 0,
+  };
+
+  const lasers = [];
+  // Each laser: {axis:'x'|'y', pos:number, width:number, t:number, period:number, phase:number}
+
+  let startT = 0;
+  let lastT = 0;
+  let elapsed = 0;
+  let hits = 0;
+  let paused = false;
+  let gameOver = false;
+
+  function reset(){
+    const t = now();
+    startT = t;
+    lastT = t;
+    elapsed = 0;
+    hits = 0;
+    paused = false;
+    gameOver = false;
+    player.x = W()/2; player.y = H()/2;
+    player.vx = 0; player.vy = 0;
+    player.dashReadyAt = t;
+    player.invulnUntil = t;
+
+    lasers.length = 0;
+    // Start with 2 lasers: one vertical sweep (x), one horizontal sweep (y)
+    lasers.push(makeLaser('x', 8.0, 0.9));
+    lasers.push(makeLaser('y', 7.2, 1.1));
+
+    elHits.textContent = hits;
+    beep(520,0.05,'sine',0.03);
+  }
+
+  function makeLaser(axis, baseSpeed, width){
+    // We'll simulate a sweeping line using a sinusoid.
+    return {
+      axis,
+      speed: baseSpeed, // higher is faster sweep
+      width: width,     // in % of min dimension, later converted
+      phase: Math.random()*Math.PI*2,
+      danger: 0.55,     // how "hot" red it is
+    };
+  }
+
+  function togglePause(){
+    if(gameOver) return;
+    paused = !paused;
+    if(!paused){
+      // avoid huge dt
+      lastT = now();
+    }
+  }
+
+  function tryDash(){
+    const t = now();
+    if(gameOver || paused) return;
+    if(t < player.dashReadyAt) return;
+    player.dashReadyAt = t + player.dashCd*1000;
+    player.invulnUntil = t + player.dashInvulnMs;
+    beep(880,0.06,'square',0.03);
+  }
+
+  function addDifficulty(){
+    // Every ~12s, add a new laser alternating axis, and slightly speed up all.
+    const tiers = Math.floor(elapsed/12);
+    const targetCount = 2 + tiers;
+    while(lasers.length < Math.min(targetCount, 7)){
+      const axis = (lasers.length % 2 === 0) ? 'x' : 'y';
+      lasers.push(makeLaser(axis, 6.5 + lasers.length*0.9, 0.75 + lasers.length*0.07));
+      beep(600,0.05,'triangle',0.02);
+    }
+    for(const L of lasers){
+      L.speed = 7.0 + elapsed*0.06 + (L.axis==='x'?0.0:0.3);
+      L.danger = clamp(0.55 + elapsed*0.01, 0.55, 0.92);
+    }
+  }
+
+  function update(dtMs){
+    if(paused) return;
+    const dt = dtMs/1000;
+
+    elapsed += dt;
+    addDifficulty();
+
+    // Movement
+    let ax = 0, ay = 0;
+    const up = keys.has('w') || keys.has('arrowup');
+    const down = keys.has('s') || keys.has('arrowdown');
+    const left = keys.has('a') || keys.has('arrowleft');
+    const right = keys.has('d') || keys.has('arrowright');
+    if(up) ay -= 1;
+    if(down) ay += 1;
+    if(left) ax -= 1;
+    if(right) ax += 1;
+    const d = len(ax, ay) || 1;
+    ax /= d; ay /= d;
+
+    const t = now();
+    const dashing = t < player.invulnUntil;
+    const spd = dashing ? player.dashSpeed : player.speed;
+
+    player.x += ax * spd * dt;
+    player.y += ay * spd * dt;
+
+    // Soft bounds with padding
+    const pad = 20;
+    player.x = clamp(player.x, pad, W()-pad);
+    player.y = clamp(player.y, pad, H()-pad);
+
+    // Collisions with lasers
+    if(!dashing){
+      for(const L of lasers){
+        const minDim = Math.min(W(), H());
+        const half = (L.width * 0.01) * minDim * 0.5 * (1.0 + 0.25*Math.sin(elapsed*0.7 + L.phase));
+
+        // Laser position: sinusoid across axis
+        const s = 0.5 + 0.5*Math.sin(elapsed * L.speed + L.phase);
+        if(L.axis === 'x'){
+          const x = s * W();
+          const dist = Math.abs(player.x - x);
+          if(dist < (player.r + half)) hit();
+        } else {
+          const y = s * H();
+          const dist = Math.abs(player.y - y);
+          if(dist < (player.r + half)) hit();
+        }
+        if(gameOver) break;
+      }
+    }
+
+    // UI
+    elTime.textContent = elapsed.toFixed(1);
+
+    const cdLeft = Math.max(0, (player.dashReadyAt - t)/1000);
+    elDash.textContent = (cdLeft <= 0.001) ? 'ready' : `${cdLeft.toFixed(1)}s`;
+  }
+
+  function hit(){
+    hits += 1;
+    elHits.textContent = hits;
+    beep(180,0.08,'sawtooth',0.04);
+    // First 3 hits: continue. 4th hit: game over.
+    if(hits >= 4){
+      gameOver = true;
+      if(elapsed > best){
+        best = elapsed;
+        localStorage.setItem(LS_KEY, String(best));
+        elBest.textContent = best.toFixed(1);
+      }
+    } else {
+      // brief invuln after getting hit
+      const t = now();
+      player.invulnUntil = t + 280;
+    }
+  }
+
+  function draw(){
+    const t = now();
+
+    // Background grid
+    ctx.clearRect(0,0,W(),H());
+
+    // subtle stars
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    for(let i=0;i<60;i++){
+      const x = (i*97)%W();
+      const y = (i*173)%H();
+      const r = 1 + ((i*13)%3);
+      ctx.fillStyle = 'white';
+      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+
+    // Lasers
+    for(const L of lasers){
+      const minDim = Math.min(W(), H());
+      const half = (L.width * 0.01) * minDim * 0.5 * (1.0 + 0.25*Math.sin(elapsed*0.7 + L.phase));
+      const s = 0.5 + 0.5*Math.sin(elapsed * L.speed + L.phase);
+
+      const hot = L.danger;
+      const core = `rgba(255,${Math.floor(80 + 80*(1-hot))},${Math.floor(120 + 60*(1-hot))},0.95)`;
+      const glow = `rgba(255,80,120,0.18)`;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(255,90,130,0.6)';
+      ctx.shadowBlur = 18;
+
+      if(L.axis === 'x'){
+        const x = s * W();
+        // glow
+        ctx.fillStyle = glow;
+        ctx.fillRect(x - half*2, 0, half*4, H());
+        // core
+        ctx.fillStyle = core;
+        ctx.fillRect(x - half, 0, half*2, H());
+      } else {
+        const y = s * H();
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, y - half*2, W(), half*4);
+        ctx.fillStyle = core;
+        ctx.fillRect(0, y - half, W(), half*2);
+      }
+
+      ctx.restore();
+    }
+
+    // Player
+    const invuln = t < player.invulnUntil;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+
+    // ring
+    ctx.globalAlpha = invuln ? 0.7 : 1.0;
+    ctx.strokeStyle = 'rgba(124,246,255,0.9)';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0,0,player.r+4,0,Math.PI*2); ctx.stroke();
+
+    // core
+    const grd = ctx.createRadialGradient(-6,-6,4, 0,0, player.r);
+    grd.addColorStop(0, 'rgba(231,245,255,1)');
+    grd.addColorStop(1, 'rgba(124,246,255,0.25)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(0,0,player.r,0,Math.PI*2); ctx.fill();
+
+    ctx.restore();
+
+    // Overlays
+    if(paused && !gameOver){
+      overlay('Paused', 'Press P to resume');
+    }
+    if(gameOver){
+      overlay('Game Over', `Time: ${elapsed.toFixed(1)}s  •  Press R to try again`);
+    }
+  }
+
+  function overlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,W(),H());
+
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.textAlign = 'center';
+    ctx.font = '700 56px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(title, W()/2, H()/2 - 10);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    ctx.font = '500 18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(subtitle, W()/2, H()/2 + 34);
+    ctx.restore();
+  }
+
+  function loop(){
+    const t = now();
+    const dt = Math.min(40, t - lastT); // clamp
+    lastT = t;
+
+    if(!gameOver) update(dt);
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Start
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
