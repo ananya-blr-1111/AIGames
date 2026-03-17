@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tunnel Drift (2026-03-17)</title>
+  <style>
+    :root{color-scheme:dark; --bg:#080b16; --fg:#eef1ff; --muted:#a7b2e6; --accent:#7cf6ff; --danger:#ff4d6d;}
+    html,body{height:100%;}
+    body{margin:0;display:grid;place-items:center;background:radial-gradient(900px 600px at 50% 35%, #111c44 0%, var(--bg) 60%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .wrap{width:min(980px,94vw);}
+    .top{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:flex-start;margin-bottom:10px;}
+    .panel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:12px 14px;backdrop-filter: blur(6px);}
+    h1{font-size:18px;margin:0 0 6px;}
+    .muted{color:var(--muted);font-size:13px;line-height:1.35;}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+    .stats b{color:var(--fg);font-weight:650}
+    canvas{width:100%;aspect-ratio:16/9;background:linear-gradient(180deg, rgba(0,0,0,.30), rgba(0,0,0,.65));border:1px solid rgba(255,255,255,.14);border-radius:16px;display:block;}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+    button{cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--fg);padding:8px 10px;border-radius:12px;font-weight:600}
+    button:hover{background:rgba(255,255,255,.12)}
+    .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="panel" style="flex:1;min-width:260px">
+        <h1>Tunnel Drift</h1>
+        <div class="muted">
+          Collect coins (+1). Avoid bombs (-1 life). Speed ramps up.
+          <br/>Controls: <b>WASD</b>/<b>Arrow keys</b> move • <b>R</b> restart • <b>P</b> pause
+        </div>
+      </div>
+      <div class="panel" style="min-width:260px">
+        <div class="stats">
+          <div>Score: <b id="score">0</b></div>
+          <div>Lives: <b id="lives">3</b></div>
+          <div>Best: <b id="best">0</b></div>
+          <div>Time: <b id="time">0.0</b>s</div>
+        </div>
+        <div class="hint">Tip: small arcs beat zig-zagging.</div>
+      </div>
+    </div>
+
+    <canvas id="c" width="1280" height="720"></canvas>
+
+    <div class="btns">
+      <button id="restart">Restart (R)</button>
+      <button id="pause">Pause/Resume (P)</button>
+    </div>
+
+    <div class="hint">Folder date: 2026-03-17. Standalone HTML game (no build step).</div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const W = () => canvas.width;
+  const H = () => canvas.height;
+
+  const elScore = document.getElementById('score');
+  const elLives = document.getElementById('lives');
+  const elBest  = document.getElementById('best');
+  const elTime  = document.getElementById('time');
+
+  const keys = new Set();
+  addEventListener('keydown', (e) => {
+    keys.add(e.key.toLowerCase());
+    if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
+    if(e.key.toLowerCase()==='r') reset();
+    if(e.key.toLowerCase()==='p') paused = !paused;
+  }, {passive:false});
+  addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+  document.getElementById('restart').onclick = () => reset();
+  document.getElementById('pause').onclick = () => paused = !paused;
+
+  const rand = (a,b) => a + Math.random()*(b-a);
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+  const LS = 'dailyBest_20260317';
+  let best = +localStorage.getItem(LS) || 0;
+  elBest.textContent = best;
+
+  let score = 0;
+  let lives = 3;
+  let t0 = performance.now();
+  let last = t0;
+  let elapsed = 0;
+  let paused = false;
+  let gameOver = false;
+
+  const player = { x: 0, y: 0, r: 18, spd: 520 };
+  const items = []; // {x,y,r,vy,type}
+
+  function spawn(){
+    const type = Math.random() < 0.75 ? 'coin' : 'bomb';
+    items.push({
+      x: rand(40, W()-40),
+      y: -30,
+      r: type==='coin'? 14 : 16,
+      vy: rand(220, 360) + elapsed*6,
+      type
+    });
+  }
+
+  function reset(){
+    score = 0;
+    lives = 3;
+    elapsed = 0;
+    t0 = last = performance.now();
+    paused = false;
+    gameOver = false;
+    items.length = 0;
+    player.x = W()/2;
+    player.y = H()*0.78;
+    syncUI();
+  }
+
+  function syncUI(){
+    elScore.textContent = score;
+    elLives.textContent = lives;
+    elTime.textContent = elapsed.toFixed(1);
+    elBest.textContent = best;
+  }
+
+  function update(dt){
+    if(paused || gameOver) return;
+    elapsed += dt;
+
+    // movement
+    let ax = 0, ay = 0;
+    if(keys.has('a')||keys.has('arrowleft')) ax -= 1;
+    if(keys.has('d')||keys.has('arrowright')) ax += 1;
+    if(keys.has('w')||keys.has('arrowup')) ay -= 1;
+    if(keys.has('s')||keys.has('arrowdown')) ay += 1;
+    const mag = Math.hypot(ax,ay) || 1;
+    ax/=mag; ay/=mag;
+    const spd = player.spd * (1 + Math.min(1.2, elapsed/40));
+    player.x = clamp(player.x + ax*spd*dt, 20, W()-20);
+    player.y = clamp(player.y + ay*spd*dt, 20, H()-20);
+
+    // spawn ramp
+    const spawnRate = 0.65 + Math.min(2.2, elapsed/18);
+    if(Math.random() < dt*spawnRate) spawn();
+
+    // items
+    for(const it of items){
+      it.y += it.vy*dt;
+    }
+
+    // collisions + cull
+    for(let i=items.length-1;i>=0;i--){
+      const it = items[i];
+      if(it.y > H()+60){ items.splice(i,1); continue; }
+      const dx = it.x - player.x, dy = it.y - player.y;
+      if(dx*dx + dy*dy < (it.r + player.r)**2){
+        if(it.type==='coin') score += 1;
+        else lives -= 1;
+        items.splice(i,1);
+        if(lives <= 0){
+          gameOver = true;
+          if(score > best){ best = score; localStorage.setItem(LS, String(best)); }
+        }
+      }
+    }
+
+    syncUI();
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W(),H());
+
+    // background grid
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.strokeStyle = 'rgba(124,246,255,0.35)';
+    for(let x=0;x<=W();x+=80){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H()); ctx.stroke(); }
+    for(let y=0;y<=H();y+=80){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W(),y); ctx.stroke(); }
+    ctx.restore();
+
+    // items
+    for(const it of items){
+      if(it.type==='coin'){
+        ctx.fillStyle = 'rgba(255, 230, 120, 0.95)';
+        ctx.shadowColor = 'rgba(255,230,120,0.65)';
+        ctx.shadowBlur = 16;
+      } else {
+        ctx.fillStyle = 'rgba(255, 77, 109, 0.95)';
+        ctx.shadowColor = 'rgba(255,77,109,0.65)';
+        ctx.shadowBlur = 18;
+      }
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // player
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.fillStyle = 'rgba(231,245,255,0.95)';
+    ctx.shadowColor = 'rgba(124,246,255,0.8)';
+    ctx.shadowBlur = 18;
+    ctx.beginPath(); ctx.arc(0,0,player.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    if(paused && !gameOver) overlay('Paused', 'Press P to resume');
+    if(gameOver) overlay('Game Over', 'Score: ' + score + '  •  Best: ' + best + '  •  Press R to restart');
+  }
+
+  function overlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,W(),H());
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.textAlign = 'center';
+    ctx.font = '700 56px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(title, W()/2, H()/2 - 10);
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    ctx.font = '500 18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(subtitle, W()/2, H()/2 + 34);
+    ctx.restore();
+  }
+
+  function loop(){
+    const t = performance.now();
+    const dt = Math.min(0.04, (t - last)/1000);
+    last = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
